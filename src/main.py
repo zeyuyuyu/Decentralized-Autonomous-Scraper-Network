@@ -1,36 +1,53 @@
-import os
 import requests
-from concurrent.futures import ThreadPoolExecutor
-from redis import Redis
+from bs4 import BeautifulSoup
+import hashlib
+import time
+import random
+import json
 
-# Configure Redis connection
-REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
-REDIS_PORT = os.getenv('REDIS_PORT', 6379)
-redis = Redis(host=REDIS_HOST, port=REDIS_PORT)
+class DecentralizedScraper:
+    def __init__(self):
+        self.nodes = []
+        self.tasks = []
+        self.results = {}
 
-# Define a function to scrape a URL and cache the result
-def scrape_url(url):
-    # Check if the URL is cached in Redis
-    cached_result = redis.get(url)
-    if cached_result:
-        return cached_result.decode('utf-8')
-    
-    # Scrape the URL
-    response = requests.get(url)
-    html = response.text
-    
-    # Cache the result in Redis
-    redis.set(url, html)
-    
-    return html
+    def add_node(self, node_url):
+        self.nodes.append(node_url)
 
-# Define a function to scrape multiple URLs in parallel
-def scrape_urls(urls):
-    with ThreadPoolExecutor() as executor:
-        results = list(executor.map(scrape_url, urls))
-    return results
+    def add_task(self, url, selector):
+        task_id = hashlib.sha256(f'{url}:{selector}'.encode()).hexdigest()
+        self.tasks.append({
+            'id': task_id,
+            'url': url,
+            'selector': selector
+        })
+        return task_id
 
-# Example usage
-urls = ['https://www.example.com', 'https://www.google.com', 'https://www.github.com']
-scraped_data = scrape_urls(urls)
-print(scraped_data)
+    def execute_task(self, task_id):
+        task = next((t for t in self.tasks if t['id'] == task_id), None)
+        if task:
+            node_url = random.choice(self.nodes)
+            response = requests.post(f'{node_url}/scrape', json={
+                'url': task['url'],
+                'selector': task['selector']
+            })
+            if response.status_code == 200:
+                self.results[task_id] = response.json()
+            else:
+                self.results[task_id] = {'error': 'Failed to scrape'}
+        else:
+            self.results[task_id] = {'error': 'Task not found'}
+
+    def get_result(self, task_id):
+        return self.results.get(task_id, None)
+
+if __name__ == '__main__':
+    scraper = DecentralizedScraper()
+    scraper.add_node('http://node1.example.com')
+    scraper.add_node('http://node2.example.com')
+    scraper.add_node('http://node3.example.com')
+
+    task_id = scraper.add_task('https://www.example.com', 'h1')
+    scraper.execute_task(task_id)
+    result = scraper.get_result(task_id)
+    print(result)

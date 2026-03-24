@@ -1,53 +1,49 @@
 import requests
-from bs4 import BeautifulSoup
-import hashlib
+import multiprocessing as mp
 import time
-import random
-import json
 
-class DecentralizedScraper:
-    def __init__(self):
-        self.nodes = []
-        self.tasks = []
-        self.results = {}
+class DistributedScraper:
+    def __init__(self, urls, num_workers):
+        self.urls = urls
+        self.num_workers = num_workers
+        self.results = []
 
-    def add_node(self, node_url):
-        self.nodes.append(node_url)
+    def scrape_url(self, url):
+        response = requests.get(url)
+        return response.text
 
-    def add_task(self, url, selector):
-        task_id = hashlib.sha256(f'{url}:{selector}'.encode()).hexdigest()
-        self.tasks.append({
-            'id': task_id,
-            'url': url,
-            'selector': selector
-        })
-        return task_id
+    def worker(self, work_queue, result_queue):
+        while True:
+            try:
+                url = work_queue.get(timeout=1)
+            except:
+                break
+            content = self.scrape_url(url)
+            result_queue.put(content)
 
-    def execute_task(self, task_id):
-        task = next((t for t in self.tasks if t['id'] == task_id), None)
-        if task:
-            node_url = random.choice(self.nodes)
-            response = requests.post(f'{node_url}/scrape', json={
-                'url': task['url'],
-                'selector': task['selector']
-            })
-            if response.status_code == 200:
-                self.results[task_id] = response.json()
-            else:
-                self.results[task_id] = {'error': 'Failed to scrape'}
-        else:
-            self.results[task_id] = {'error': 'Task not found'}
+    def run(self):
+        work_queue = mp.Queue()
+        result_queue = mp.Queue()
 
-    def get_result(self, task_id):
-        return self.results.get(task_id, None)
+        for url in self.urls:
+            work_queue.put(url)
+
+        processes = []
+        for _ in range(self.num_workers):
+            p = mp.Process(target=self.worker, args=(work_queue, result_queue))
+            p.start()
+            processes.append(p)
+
+        for _ in range(len(self.urls)):
+            self.results.append(result_queue.get())
+
+        for p in processes:
+            p.terminate()
+
+        return self.results
 
 if __name__ == '__main__':
-    scraper = DecentralizedScraper()
-    scraper.add_node('http://node1.example.com')
-    scraper.add_node('http://node2.example.com')
-    scraper.add_node('http://node3.example.com')
-
-    task_id = scraper.add_task('https://www.example.com', 'h1')
-    scraper.execute_task(task_id)
-    result = scraper.get_result(task_id)
-    print(result)
+    urls = ['https://example.com', 'https://another-example.com', 'https://third-example.com']
+    scraper = DistributedScraper(urls, num_workers=4)
+    results = scraper.run()
+    print(results)

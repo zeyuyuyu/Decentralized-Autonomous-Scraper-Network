@@ -1,85 +1,33 @@
-import logging
-import time
-from typing import Optional, Dict, Any
 import requests
-from requests.adapters import HTTPAdapter
-from requests.packages.urllib3.util.retry import Retry
+from typing import Dict, List
+from dataclasses import dataclass
+
+@dataclass
+class ScrapedData:
+    url: str
+    data: Dict[str, any]
 
 class BaseScraper:
-    def __init__(
-        self,
-        max_retries: int = 3,
-        backoff_factor: float = 0.3,
-        proxy_list: Optional[list] = None,
-        timeout: int = 10,
-        verify_ssl: bool = True
-    ):
-        self.logger = logging.getLogger(self.__class__.__name__)
-        self.timeout = timeout
-        self.verify_ssl = verify_ssl
-        self.proxy_list = proxy_list
-        self.current_proxy_index = 0
+    def __init__(self, worker_id: str, worker_count: int):
+        self.worker_id = worker_id
+        self.worker_count = worker_count
 
-        # Configure retry strategy
-        retry_strategy = Retry(
-            total=max_retries,
-            backoff_factor=backoff_factor,
-            status_forcelist=[429, 500, 502, 503, 504]
-        )
+    def scrape(self, urls: List[str]) -> List[ScrapedData]:
+        """
+        Scrapes the given list of URLs and returns the scraped data.
+        This implementation uses a distributed approach, where each worker
+        scrapes a portion of the URLs based on its worker_id and worker_count.
+        """
+        scraped_data = []
+        for i, url in enumerate(urls):
+            if i % self.worker_count == self.worker_id:
+                data = self.scrape_url(url)
+                scraped_data.append(ScrapedData(url, data))
+        return scraped_data
 
-        # Create session with retry logic
-        self.session = requests.Session()
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount('http://', adapter)
-        self.session.mount('https://', adapter)
-
-    def _get_next_proxy(self) -> Optional[Dict[str, str]]:
-        """Rotate through proxy list in round-robin fashion"""
-        if not self.proxy_list:
-            return None
-        
-        proxy = self.proxy_list[self.current_proxy_index]
-        self.current_proxy_index = (self.current_proxy_index + 1) % len(self.proxy_list)
-        return {"http": proxy, "https": proxy}
-
-    def make_request(
-        self,
-        url: str,
-        method: str = 'GET',
-        headers: Optional[Dict[str, str]] = None,
-        data: Any = None,
-        json_data: Any = None
-    ) -> requests.Response:
-        """Make HTTP request with retry logic and proxy support"""
-        try:
-            proxies = self._get_next_proxy()
-            response = self.session.request(
-                method=method,
-                url=url,
-                headers=headers,
-                data=data,
-                json=json_data,
-                timeout=self.timeout,
-                verify=self.verify_ssl,
-                proxies=proxies
-            )
-            response.raise_for_status()
-            return response
-
-        except requests.exceptions.RequestException as e:
-            self.logger.error(f"Request failed: {str(e)}")
-            raise
-
-    def scrape(self, url: str) -> Dict[str, Any]:
-        """Template method to be implemented by concrete scrapers"""
-        raise NotImplementedError("Concrete scrapers must implement scrape method")
-
-    def clean_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Template method for cleaning scraped data"""
-        return data
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.session.close()
+    def scrape_url(self, url: str) -> Dict[str, any]:
+        """
+        Scrapes the given URL and returns the scraped data.
+        Subclasses should implement this method.
+        """
+        raise NotImplementedError()
